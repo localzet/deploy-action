@@ -1,6 +1,8 @@
 # Localzet Deploy
 
-Universal Docker Compose deployment over SSH. The runner transfers a Git commit snapshot; the server builds images and manages releases. No framework-specific adapters or mandatory registry.
+[Русская документация](README.ru.md)
+
+Universal Docker Compose deployment over SSH. The runner transfers a Git commit snapshot; the server manages releases; images can be built on the server or runner. No framework-specific adapters or mandatory registry.
 
 **Preview:** test in staging before production. The action is not a zero-downtime orchestrator.
 
@@ -40,6 +42,12 @@ Set `DEPLOY_KNOWN_HOSTS` to a trusted OpenSSH known_hosts entry verified against
 | `keep-releases` | `3` | Number of retained successful releases. |
 | `operation` | `deploy` | deploy or rollback. |
 
+| `build-mode` | `vps` | Build location: vps, runner or registry. |
+| `registry-prefix` | empty | Fully qualified image repository for registry mode. |
+| `backup` | empty | Commands in old running services, before migration. One SERVICE COMMAND per line. |
+| `pre-deploy` | empty | One-off commands in new images before activation. One SERVICE COMMAND per line. |
+| `post-deploy` | empty | Commands in new running services after readiness. One SERVICE COMMAND per line. |
+
 Outputs: `release`, `project`.
 
 Compose files are autodetected when there is a single standard file in the root or a unique YAML file with `compose` in its name. Specify multiple files in order explicitly. Overrides are not automatically included.
@@ -58,7 +66,39 @@ An existing unmanaged Compose project with the same name is rejected. Migrate it
 
 Deployment prepares images first, then activates Compose with `--wait`. Optional HTTP check requires a 2xx response. If activation fails, the previous release is reactivated. Manual rollback: set `operation: rollback` with the same project and deployment path. Rollback restores application images, not database migrations, shared files or external services. No volume deletion or global prune is performed.
 
-Limitations: Git LFS objects are not bundled; no zero-downtime guarantee; builds run on the VPS; no automatic framework migrations; no adoption of an existing unmanaged Compose project. Use only trusted branches and reviewed Compose definitions; Docker access can grant root-equivalent privileges.
+Limitations: Git LFS objects are not bundled; no zero-downtime guarantee; no automatic framework migrations; no adoption of an existing unmanaged Compose project. Use only trusted branches and reviewed Compose definitions; Docker access can grant root-equivalent privileges.
+
+## Build modes and registry
+
+- `vps` (default): build on the target. No registry is required for application images.
+- `runner`: build the committed snapshot on the runner, transfer images via SSH using docker save/load. Requires Docker Compose on the runner and matching target architecture or explicit compatible platform.
+- `registry`: build on the runner and push unique release tags to `registry-prefix` (e.g. `ghcr.io/owner/project`). The server pulls and checks image IDs before creating local release tags. Both sides must authenticate to the registry before deployment. See [GHCR example](examples/ghcr.yml). Registry retention is independent of server release retention.
+
+Runner modes do not copy production .env to the runner. Supply only build-time interpolation values through the optional `DEPLOY_BUILD_ENV` secret (dotenv format, outside the build context). Runtime service env files are not resolved on the runner; a build-only model is generated from the Compose configuration. For mandatory runtime interpolation (for example `${DB_HOST:?required}`), supply non-sensitive placeholder values in `DEPLOY_BUILD_ENV` unless the variable actually affects the build. The build and server Compose service sets must match. Do not use server-only bind mounts, absolute build paths or runtime secrets as build inputs. External registry images are pulled on the target in all modes. Multi-platform manifest builds are not provided.
+
+## Hooks and backups
+
+Each line is a service name followed by a command and shell-style quoted arguments. A shell is not implied; use explicit `sh -c` when needed.
+
+```yaml
+with:
+  backup: |
+    db /usr/local/bin/backup
+  pre-deploy: |
+    app php artisan migrate --force
+  post-deploy: |
+    app php artisan queue:restart
+```
+
+The backup hook executes in the current running service (skipped on first deployment). The pre-hook uses the new image in a one-off container with no dependency startup, so a migration requiring a database needs an already reachable database. Post-hooks run in new running services after readiness; failure triggers application rollback. Hooks run only for deploy, not recovery or manual rollback. Backups must be implemented by the application and saved to persistent storage. Data mutations cannot be undone by image rollback.
+
+## SSH jump hosts
+
+Optional `DEPLOY_JUMP_HOST`, `DEPLOY_JUMP_USER`, `DEPLOY_JUMP_PORT` (22), `DEPLOY_JUMP_SSH_KEY`, `DEPLOY_JUMP_KNOWN_HOSTS`. The jump uses public-key authentication and its own verified host key; if no separate key or known_hosts is supplied, the target values are reused. Target authentication can use password or key.
+
+## Existing projects and multiple servers
+
+Read [migration and staging guidance](docs/migration.md) before deploying an existing stack. For sequential deployment to separate servers, see [matrix example](examples/multi-server.yml). This does not provide atomic multi-host rollback.
 
 ## Tests
 

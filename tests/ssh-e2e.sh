@@ -7,6 +7,7 @@ test_user=localzet-ci-deploy
 test_password="$(openssl rand -hex 24)"
 port=22222
 cleanup() {
+  docker rm -f localzet-ci-registry >/dev/null 2>&1 || true
   if [[ -f "$work/sshd.pid" ]]; then sudo kill "$(cat "$work/sshd.pid")" || true; fi
   sudo userdel -r "$test_user" >/dev/null 2>&1 || true
   rm -rf "$work"
@@ -44,6 +45,10 @@ cat > compose.yml <<'EOF'
 services:
   app:
     build: .
+    env_file:
+      - .env
+    environment:
+      RUNTIME_HOST: "${RUNTIME_HOST:?RUNTIME_HOST required}"
     healthcheck:
       test: [CMD-SHELL, 'test -f /healthy']
       interval: 1s
@@ -62,6 +67,14 @@ export DEPLOY_KNOWN_HOSTS="[127.0.0.1]:$port $(cat "$work/host_key.pub")"
 export ACTION_PROJECT_NAME=localzet-ssh-ci
 export ACTION_WAIT_TIMEOUT=30
 export ACTION_OPERATION=deploy
+# The real dotenv is deliberately server-only.
+shared="/home/$test_user/.local/share/localzet-deploy/localzet-ssh-ci/shared"
+sudo -u "$test_user" mkdir -p "$shared"
+sudo -u "$test_user" chmod 700 "$shared"
+printf 'RUNTIME_HOST=server-only\nPRIVATE_RUNTIME_TOKEN=server-only-secret\n' | sudo tee "$shared/.env" >/dev/null
+sudo chown "$test_user" "$shared/.env"
+sudo chmod 600 "$shared/.env"
+export DEPLOY_BUILD_ENV='RUNTIME_HOST=unused-build-placeholder'
 # Isolate outputs from the surrounding CI step.
 export GITHUB_OUTPUT="$work/outputs"
 export DEPLOY_SSH_KEY="$(cat "$work/client_key")"
@@ -72,18 +85,36 @@ cid() { docker ps -q --filter label=com.docker.compose.project=localzet-ssh-ci -
 [[ "$(docker exec "$(cid)" cat /version)" == 1 ]]
 unset DEPLOY_SSH_KEY
 export DEPLOY_PASSWORD="$test_password"
+export ACTION_BUILD_MODE=runner
 write_version 2
 python3 "$action_dir/scripts/client.py"
 [[ "$(docker exec "$(cid)" cat /version)" == 2 ]]
+# Registry mode with a disposable loopback registry; verify SSH jump key as well.
+docker run -d --name localzet-ci-registry -p 127.0.0.1:25000:5000 registry:2
+for i in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:25000/v2/ >/dev/null; then break; fi
+  sleep 1
+done
+export ACTION_BUILD_MODE=registry ACTION_REGISTRY_PREFIX=127.0.0.1:25000/localzet/test
+export DEPLOY_JUMP_HOST=127.0.0.1 DEPLOY_JUMP_PORT="$port" DEPLOY_JUMP_USER="$test_user"
+export DEPLOY_JUMP_SSH_KEY="$(cat "$work/client_key")"
+export ACTION_PRE_DEPLOY='app sh -c "test -f /healthy"'
+export ACTION_POST_DEPLOY='app sh -c "test -f /healthy"'
+write_version 3
+python3 "$action_dir/scripts/client.py"
+[[ "$(docker exec "$(cid)" cat /version)" == 3 ]]
+[[ "$(docker exec "$(cid)" printenv PRIVATE_RUNTIME_TOKEN)" == server-only-secret ]]
+unset DEPLOY_JUMP_HOST DEPLOY_JUMP_PORT DEPLOY_JUMP_USER DEPLOY_JUMP_SSH_KEY
+unset ACTION_PRE_DEPLOY ACTION_POST_DEPLOY
 export ACTION_OPERATION=rollback
 python3 "$action_dir/scripts/client.py"
-[[ "$(docker exec "$(cid)" cat /version)" == 1 ]]
+[[ "$(docker exec "$(cid)" cat /version)" == 2 ]]
 # Wrong trusted host key must fail before executing remote commands.
 export DEPLOY_KNOWN_HOSTS="[127.0.0.1]:$port $(cat "$work/client_key.pub")"
 if python3 "$action_dir/scripts/client.py"; then
   echo "Unexpectedly accepted a wrong host key" >&2
   exit 1
 fi
-[[ "$(docker exec "$(cid)" cat /version)" == 1 ]]
+[[ "$(docker exec "$(cid)" cat /version)" == 2 ]]
 docker rm -f "$(cid)"
 echo "SSH key, password, host verification and rollback smoke test passed"

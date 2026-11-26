@@ -12,6 +12,8 @@ import tempfile
 import tarfile
 import uuid
 
+from runner import build_images, registry_prefix
+
 
 def env(*names):
     return next((os.environ[n] for n in names if os.environ.get(n)), "")
@@ -41,7 +43,15 @@ def configuration():
     policy = env('ACTION_PULL_POLICY') or 'always'
     if operation not in ('deploy', 'rollback') or policy not in ('always', 'missing', 'never'):
         raise ValueError('Invalid operation or pull-policy')
+    mode = env('ACTION_BUILD_MODE') or 'vps'
+    if mode not in ('vps', 'runner', 'registry'):
+        raise ValueError('build-mode must be vps, runner or registry')
+    prefix = env('ACTION_REGISTRY_PREFIX')
+    if operation == 'deploy' and mode == 'registry':
+        registry_prefix(prefix)
     return dict(project=project, operation=operation, pull_policy=policy,
+                build_mode=mode, registry_prefix=prefix, manifest={},
+                backup=lines('ACTION_BACKUP'), pre=lines('ACTION_PRE_DEPLOY'), post=lines('ACTION_POST_DEPLOY'),
                 root=env('ACTION_DEPLOY_PATH'), files=lines('ACTION_COMPOSE_FILES'),
                 shared=lines('ACTION_SHARED_PATHS'), profiles=lines('ACTION_PROFILES'),
                 wait=integer('ACTION_WAIT_TIMEOUT', 120, 1, 3600),
@@ -68,8 +78,9 @@ def ssh_setup(tmp):
             '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'ConnectTimeout=15',
             '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', '-o', 'ForwardAgent=no']
     child_env = os.environ.copy()
-    for n in ('DEPLOY_SSH_KEY', 'SERVER_SSH_KEY', 'DEPLOY_PASSWORD', 'SERVER_PASSWORD', 'SSHPASS'):
-        child_env.pop(n, None)
+    for n in list(child_env):
+        if n.startswith(('DEPLOY_', 'SERVER_')) or n == 'SSHPASS':
+            child_env.pop(n, None)
     if key:
         key_file = tmp / 'id'; key_file.write_text(key.rstrip() + '\n'); key_file.chmod(0o600)
         args += ['-i', str(key_file), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'PreferredAuthentications=publickey']
@@ -79,6 +90,22 @@ def ssh_setup(tmp):
             subprocess.run(['sudo', 'apt-get', 'install', '-y', 'sshpass'], check=True, env=child_env)
         child_env['SSHPASS'] = password
         args = ['sshpass', '-e'] + args + ['-o', 'PreferredAuthentications=password,keyboard-interactive', '-o', 'PubkeyAuthentication=no', '-o', 'NumberOfPasswordPrompts=1']
+    jump = env('DEPLOY_JUMP_HOST')
+    if jump:
+        ju = env('DEPLOY_JUMP_USER') or user
+        jp = int(env('DEPLOY_JUMP_PORT') or '22')
+        jk = env('DEPLOY_JUMP_SSH_KEY') or key
+        jknown = env('DEPLOY_JUMP_KNOWN_HOSTS') or known
+        if not re.fullmatch(r'[A-Za-z0-9:][A-Za-z0-9.:%_-]*', jump) or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', ju) or not 1 <= jp <= 65535 or not jk:
+            raise ValueError('Jump host requires a valid address, user, port and SSH key')
+        jkey = tmp/'jump_key'; jkey.write_text(jk.rstrip()+'\n'); jkey.chmod(0o600)
+        jhosts = tmp/'jump_hosts'; jhosts.write_text(jknown.rstrip()+'\n'); jhosts.chmod(0o600)
+        proxy = ['ssh', '-F', '/dev/null', '-o', 'BatchMode=yes',
+                 '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=yes',
+                 '-o', 'GlobalKnownHostsFile=/dev/null', '-o', f'UserKnownHostsFile={jhosts}',
+                 '-o', 'ConnectTimeout=15', '-o', 'ForwardAgent=no',
+                 '-i', str(jkey), '-p', str(jp), '-l', ju, '-W', '[%h]:%p', jump]
+        args += ['-o', 'ProxyCommand='+shlex.join(proxy)]
     return args + [host], child_env
 
 
@@ -129,6 +156,8 @@ def main():
             cfg['commit'] = git('rev-parse', 'HEAD').decode().strip()
             archive_source(workspace, cfg['commit'], tmp/'source.tar.gz')
         args, child_env = ssh_setup(tmp)
+        if cfg['operation'] == 'deploy' and cfg['build_mode'] != 'vps':
+            cfg['manifest'] = build_images(cfg, tmp, env('DEPLOY_BUILD_ENV'))
         def ssh(command, **kwargs):
             return subprocess.run(args + [shlex.join(command)], env=child_env, check=True, **kwargs)
         remote = ssh(['mktemp', '-d', '/tmp/localzet-deploy.XXXXXXXXXX'], stdout=subprocess.PIPE, text=True).stdout.strip()
@@ -143,6 +172,8 @@ def main():
             upload(Path(__file__).with_name('remote.py'), 'remote.py')
             if cfg['operation'] == 'deploy':
                 upload(tmp/'source.tar.gz', 'source.tar.gz')
+                if (tmp/'images.tar').is_file():
+                    upload(tmp/'images.tar', 'images.tar')
             ssh(['python3', '-u', remote+'/remote.py', remote])
             result = json.loads(ssh(['cat', remote+'/result.json'], stdout=subprocess.PIPE, text=True).stdout)
             if env('GITHUB_OUTPUT'):

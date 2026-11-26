@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 import remote
 import client
+import runner
 
 
 class DeployTests(unittest.TestCase):
@@ -143,5 +144,42 @@ class DeployTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'pinned commit'):
             client.archive_source(root, commit, target)
 
+
+    def test_build_model_omits_runtime_secrets_and_escapes_dollars(self):
+        model = {'services': {'app': {'build': {'context': '/tmp/src', 'args': {'VALUE': '$literal'}},
+                                     'env_file': ['.env'], 'environment': {'PASSWORD': 'secret'},
+                                     'volumes': ['data:/data'], 'platform': 'linux/amd64'}},
+                 'secrets': {'runtime': {'file': '/tmp/runtime-secret'}}}
+        result = runner.build_model(model, model['services'], {'app': 'localzet-deploy/demo:one'})
+        self.assertEqual(result, {'services': {'app': {'build': {'context': '/tmp/src', 'args': {'VALUE': '$$literal'}},
+                                                      'platform': 'linux/amd64', 'image': 'localzet-deploy/demo:one'}}})
+
+    def test_registry_validation(self):
+        for value in ('ghcr.io/owner/repo', '127.0.0.1:25000/owner/repo'):
+            self.assertEqual(runner.registry_prefix(value), value)
+        for value in ('owner/repo', 'ghcr.io/OWNER/repo', 'ghcr.io/owner/repo:latest', 'ghcr.io/owner/repo;echo'):
+            with self.assertRaises(ValueError):
+                runner.registry_prefix(value)
+
+    def test_hooks_run_in_order_and_rollback_on_post_failure(self):
+        first = self.deploy(1)['current']
+        self.bundle()
+        cfg = self.cfg(2)
+        cfg.update(backup=['app backup'], pre=['app migrate --force'], post=['app bad-hook'])
+        original = self.docker
+        def fake(args, **kw):
+            result = original(args, **kw)
+            if 'bad-hook' in args:
+                raise subprocess.CalledProcessError(1, args)
+            return result
+        with patch.object(remote, 'run', side_effect=fake):
+            with self.assertRaises(subprocess.CalledProcessError):
+                remote.Manager(cfg,self.incoming).execute()
+        self.assertEqual(json.loads((self.root/'state.json').read_text())['current'], first)
+        backup = next(i for i,c in enumerate(self.calls) if 'backup' in c)
+        migrate = next(i for i,c in enumerate(self.calls) if 'migrate' in c)
+        failure = next(i for i,c in enumerate(self.calls) if 'bad-hook' in c)
+        self.assertLess(backup,migrate); self.assertLess(migrate,failure)
+        self.assertTrue(any('up' in c and any(first in x for x in c) for c in self.calls[failure+1:]))
 
 if __name__ == '__main__': unittest.main()
