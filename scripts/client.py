@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Runner-side SSH transport."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -110,6 +111,31 @@ def ssh_setup(tmp):
 
 
 
+def archived_file(output, source, member, repo, prefix):
+    """Hydrate only verified Git LFS objects, never arbitrary checkout content."""
+    stream = source.extractfile(member)
+    if member.size > 1024:
+        output.addfile(member, stream)
+        return
+    contents = stream.read()
+    if not contents.startswith(b'version https://git-lfs.github.com/spec/v1\n'):
+        output.addfile(member, io.BytesIO(contents))
+        return
+    oid = re.search(rb'^oid sha256:([a-f0-9]{64})$', contents, re.MULTILINE)
+    size = re.search(rb'^size ([0-9]+)$', contents, re.MULTILINE)
+    if not oid or not size:
+        raise ValueError(f'Invalid Git LFS pointer: {member.name}')
+    file = repo/member.name[len(prefix):]
+    if file.is_symlink() or not file.is_file() or not file.resolve().is_relative_to(repo):
+        raise ValueError(f'Git LFS object is missing: {member.name}; configure checkout lfs: true')
+    with file.open('rb') as content:
+        if os.fstat(content.fileno()).st_size != int(size[1]) or hashlib.file_digest(content, 'sha256').hexdigest().encode() != oid[1]:
+            raise ValueError(f'Git LFS object does not match committed pointer: {member.name}; configure checkout lfs: true')
+        content.seek(0)
+        member.size = int(size[1])
+        output.addfile(member, content)
+
+
 def archive_source(workspace, commit, destination):
     """Archive committed files and recursively checked-out, pinned Git submodules."""
     workspace = Path(workspace).resolve()
@@ -129,7 +155,10 @@ def archive_source(workspace, commit, destination):
                     included = set()
                     for member in source:
                         included.add(member.name.rstrip('/'))
-                        output.addfile(member, source.extractfile(member) if member.isfile() else None)
+                        if member.isfile():
+                            archived_file(output, source, member, repo, prefix)
+                        else:
+                            output.addfile(member)
             for entry in git('ls-tree', '-r', '-z', oid).split(b'\0'):
                 if not entry.startswith(b'160000 '):
                     continue
@@ -150,7 +179,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix='localzet-deploy-') as d:
         tmp = Path(d)
         if cfg['operation'] == 'deploy':
-            workspace = env('GITHUB_WORKSPACE') or os.getcwd()
+            workspace = Path(env('GITHUB_WORKSPACE') or os.getcwd()).resolve()
+            selected = (workspace/(env('ACTION_SOURCE_PATH') or '.')).resolve()
+            if not selected.is_relative_to(workspace) or not selected.is_dir():
+                raise ValueError('source-path must be an existing directory inside the workspace')
+            workspace = str(selected)
             def git(*args):
                 return subprocess.check_output(['git', '-C', workspace, *args])
             cfg['commit'] = git('rev-parse', 'HEAD').decode().strip()

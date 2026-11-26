@@ -12,6 +12,7 @@
 
 | Параметр | Назначение |
 |---|---|
+| `source-path` | Каталог checkout относительно GITHUB_WORKSPACE |
 | `compose-files` | Compose-файлы в порядке наложения, по одному на строку |
 | `project-name` | Постоянное имя Compose-проекта |
 | `deploy-path` | Абсолютный каталог проекта на сервере |
@@ -35,5 +36,7 @@
 При сборке на Runner передавайте только необходимые build-time значения через `DEPLOY_BUILD_ENV` (dotenv). Runtime `.env` остаётся на сервере. Для registry авторизуйте Runner и сервер отдельно; [пример GHCR](examples/ghcr.yml). Проверьте платформу образов и совпадение набора сервисов. Для приватных субмодулей настройте checkout с `submodules: recursive` и подходящими правами.
 
 Хуки задаются как `SERVICE COMMAND ARG...` по одному на строку. Для shell используйте явный `sh -c`. Backup пропускается при первом деплое, pre-hook не запускает зависимости (БД должна быть доступна), post-hook при ошибке запускает откат приложения. Бэкап реализуется проектом и сохраняется в постоянное хранилище. Jump host использует отдельный или общий SSH-ключ и доверенный known_hosts (`DEPLOY_JUMP_HOST`, `DEPLOY_JUMP_USER`, `DEPLOY_JUMP_PORT`, `DEPLOY_JUMP_SSH_KEY`, `DEPLOY_JUMP_KNOWN_HOSTS`).
+
+Git LFS: checkout с `lfs: true`; файл попадёт в архив только при совпадении SHA-256 и размера с указателем в коммите. Для Telegram задайте `DEPLOY_TELEGRAM_BOT_TOKEN` и `DEPLOY_TELEGRAM_CHAT_ID`; ошибка уведомления не меняет результат деплоя. Файл `VERSION` запускает выпуск релиза после CI при изменении в main.
 
 Подробности, ограничения и тесты: [README.md](README.md).
