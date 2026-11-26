@@ -7,6 +7,7 @@ test_user=localzet-ci-deploy
 test_password="$(openssl rand -hex 24)"
 port=22222
 cleanup() {
+  docker rm -f localzet-ci-registry >/dev/null 2>&1 || true
   if [[ -f "$work/sshd.pid" ]]; then sudo kill "$(cat "$work/sshd.pid")" || true; fi
   sudo userdel -r "$test_user" >/dev/null 2>&1 || true
   rm -rf "$work"
@@ -72,18 +73,35 @@ cid() { docker ps -q --filter label=com.docker.compose.project=localzet-ssh-ci -
 [[ "$(docker exec "$(cid)" cat /version)" == 1 ]]
 unset DEPLOY_SSH_KEY
 export DEPLOY_PASSWORD="$test_password"
+export ACTION_BUILD_MODE=runner
 write_version 2
 python3 "$action_dir/scripts/client.py"
 [[ "$(docker exec "$(cid)" cat /version)" == 2 ]]
+# Registry mode with a disposable loopback registry; verify SSH jump key as well.
+docker run -d --name localzet-ci-registry -p 127.0.0.1:25000:5000 registry:2
+for i in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:25000/v2/ >/dev/null; then break; fi
+  sleep 1
+done
+export ACTION_BUILD_MODE=registry ACTION_REGISTRY_PREFIX=127.0.0.1:25000/localzet/test
+export DEPLOY_JUMP_HOST=127.0.0.1 DEPLOY_JUMP_PORT="$port" DEPLOY_JUMP_USER="$test_user"
+export DEPLOY_JUMP_SSH_KEY="$(cat "$work/client_key")"
+export ACTION_PRE_DEPLOY='app sh -c "test -f /healthy"'
+export ACTION_POST_DEPLOY='app sh -c "test -f /healthy"'
+write_version 3
+python3 "$action_dir/scripts/client.py"
+[[ "$(docker exec "$(cid)" cat /version)" == 3 ]]
+unset DEPLOY_JUMP_HOST DEPLOY_JUMP_PORT DEPLOY_JUMP_USER DEPLOY_JUMP_SSH_KEY
+unset ACTION_PRE_DEPLOY ACTION_POST_DEPLOY
 export ACTION_OPERATION=rollback
 python3 "$action_dir/scripts/client.py"
-[[ "$(docker exec "$(cid)" cat /version)" == 1 ]]
+[[ "$(docker exec "$(cid)" cat /version)" == 2 ]]
 # Wrong trusted host key must fail before executing remote commands.
 export DEPLOY_KNOWN_HOSTS="[127.0.0.1]:$port $(cat "$work/client_key.pub")"
 if python3 "$action_dir/scripts/client.py"; then
   echo "Unexpectedly accepted a wrong host key" >&2
   exit 1
 fi
-[[ "$(docker exec "$(cid)" cat /version)" == 1 ]]
+[[ "$(docker exec "$(cid)" cat /version)" == 2 ]]
 docker rm -f "$(cid)"
 echo "SSH key, password, host verification and rollback smoke test passed"

@@ -37,6 +37,21 @@ inputs:
   operation:
     description: "deploy or rollback."
     default: "deploy"
+  build-mode:
+    description: "Build location: vps, runner or registry."
+    default: "vps"
+  registry-prefix:
+    description: "Fully qualified image repository for registry mode."
+    default: ""
+  backup:
+    description: "Commands in old running services, before migration. One SERVICE COMMAND per line."
+    default: ""
+  pre-deploy:
+    description: "One-off commands in new images before activation. One SERVICE COMMAND per line."
+    default: ""
+  post-deploy:
+    description: "Commands in new running services after readiness. One SERVICE COMMAND per line."
+    default: ""
 outputs:
   release:
     description: Active release ID.
@@ -61,4 +76,9 @@ runs:
         ACTION_HEALTH_TIMEOUT: ${{ inputs.health-timeout }}
         ACTION_KEEP_RELEASES: ${{ inputs.keep-releases }}
         ACTION_OPERATION: ${{ inputs.operation }}
+        ACTION_BUILD_MODE: ${{ inputs.build-mode }}
+        ACTION_REGISTRY_PREFIX: ${{ inputs.registry-prefix }}
+        ACTION_BACKUP: ${{ inputs.backup }}
+        ACTION_PRE_DEPLOY: ${{ inputs.pre-deploy }}
+        ACTION_POST_DEPLOY: ${{ inputs.post-deploy }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/client.py"

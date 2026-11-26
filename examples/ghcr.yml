@@ -1,0 +1,35 @@
+name: Deploy using GHCR
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Authenticate runner to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Compute lowercase image repository
+        id: registry
+        run: echo "prefix=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      # Configure read-only registry credentials on the VPS separately.
+      - uses: localzet/deploy-action@main
+        with:
+          build-mode: registry
+          registry-prefix: ${{ steps.registry.outputs.prefix }}
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
+          DEPLOY_BUILD_ENV: ${{ secrets.BUILD_ENV }}

@@ -7,6 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -183,8 +184,43 @@ class Manager:
             if not original:
                 raise ValueError(f'No image or build for {name}')
             run(['docker', 'image', 'tag', original, tags[name]])
-        if builds:
-            self.call(meta, 'build', *builds)
+        mode = self.cfg.get('build_mode', 'vps')
+        if mode == 'vps':
+            if builds:
+                self.call(meta, 'build', *builds)
+        elif mode in ('runner', 'registry'):
+            manifest = self.cfg.get('manifest', {})
+            if set(manifest) != set(builds):
+                raise ValueError('Runner and server disagree on build services; check build env and profiles')
+            if builds and mode == 'runner':
+                run(['docker', 'image', 'load', '-i', self.incoming/'images.tar'])
+            for name in builds:
+                entry = manifest[name]
+                expected = entry['id']
+                if not re.fullmatch(r'sha256:[a-f0-9]{64}', expected):
+                    raise ValueError('Invalid image ID in runner manifest')
+                tag = tags[name]
+                ref = tag
+                if mode == 'registry':
+                    ref = self.cfg['registry_prefix']+':'+tag.rsplit(':', 1)[1]
+                    if entry.get('ref') != ref:
+                        raise ValueError('Unexpected registry image reference')
+                    run(['docker', 'pull', ref])
+                actual = run(['docker', 'image', 'inspect', '--format', '{{.Id}}', ref], capture=True).strip()
+                if actual != expected:
+                    raise ValueError(f'Image integrity mismatch for {name}')
+                if ref != tag:
+                    run(['docker', 'image', 'tag', ref, tag])
+                    run(['docker', 'image', 'rm', ref], quiet=True)
+                image_platform = run(['docker', 'image', 'inspect', '--format', '{{.Os}}/{{.Architecture}}', tag], capture=True).strip()
+                host_platform = run(['docker', 'info', '--format', '{{.OSType}}/{{.Architecture}}'], capture=True).strip()
+                for old, new in (('/x86_64','/amd64'), ('/aarch64','/arm64'), ('/armv7l','/arm')):
+                    host_platform = host_platform.replace(old, new)
+                platform = services[name].get('platform') or host_platform
+                if image_platform != '/'.join(platform.split('/')[:2]):
+                    raise ValueError(f'Image platform mismatch for {name}: {image_platform} != {platform}')
+        else:
+            raise ValueError('Invalid build mode')
         for tag in tags.values():
             run(['docker', 'image', 'inspect', tag], quiet=True)
         return meta
@@ -242,11 +278,20 @@ class Manager:
             self.call(self.meta(candidate), 'down', '--remove-orphans')
         self.pending_path.unlink()
 
-    def switch(self, candidate, order):
+    def hooks(self, meta, commands, *, pre=False):
+        for line in commands:
+            words = shlex.split(line)
+            if len(words) < 2 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', words[0]):
+                raise ValueError('Hook must be SERVICE COMMAND [ARG...]')
+            args = ['run', '--rm', '--no-deps', '-T', '--pull', 'never'] if pre else ['exec', '-T']
+            self.call(meta, *args, *words)
+
+    def switch(self, candidate, order, post=()):
         previous = self.state['current']
         atomic_json(self.pending_path, {'candidate': candidate, 'previous': previous})
         try:
             self.activate(candidate)
+            self.hooks(self.meta(candidate), post)
             self.state = {'project': self.project, 'current': candidate, 'history': order}
             atomic_json(self.state_path, self.state)
         except BaseException:
@@ -277,8 +322,11 @@ class Manager:
                         raise ValueError('Existing unmanaged Compose project; choose a new name or migrate manually')
                 candidate = self.cfg['release']
                 try:
-                    self.prepare(candidate)
-                    self.switch(candidate, [candidate]+history)
+                    meta = self.prepare(candidate)
+                    if self.state['current']:
+                        self.hooks(self.meta(self.state['current']), self.cfg.get('backup', []))
+                    self.hooks(meta, self.cfg.get('pre', []), pre=True)
+                    self.switch(candidate, [candidate]+history, self.cfg.get('post', []))
                 except BaseException:
                     if not self.pending_path.exists() and self.state['current'] != candidate:
                         self.remove_release(candidate)
