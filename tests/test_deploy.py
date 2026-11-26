@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 import remote
 import client
 import runner
+import notify
 
 
 class DeployTests(unittest.TestCase):
@@ -181,5 +182,45 @@ class DeployTests(unittest.TestCase):
         failure = next(i for i,c in enumerate(self.calls) if 'bad-hook' in c)
         self.assertLess(backup,migrate); self.assertLess(migrate,failure)
         self.assertTrue(any('up' in c and any(first in x for x in c) for c in self.calls[failure+1:]))
+
+
+    def test_git_lfs_hydration_verifies_committed_content(self):
+        import hashlib
+        repo = self.base/'lfs'
+        repo.mkdir()
+        def git(*args):
+            return subprocess.check_output(['git', '-C', str(repo), *args], stderr=subprocess.DEVNULL).decode().strip()
+        git('init')
+        git('config', 'user.name', 'Test')
+        git('config', 'user.email', 'test@example.invalid')
+        blob = b'verified object data'
+        path = repo/'asset.dat'
+        path.write_text(f'version https://git-lfs.github.com/spec/v1\noid sha256:{hashlib.sha256(blob).hexdigest()}\nsize {len(blob)}\n')
+        git('add', 'asset.dat')
+        git('commit', '-m', 'pointer')
+        commit = git('rev-parse', 'HEAD')
+        output = self.base/'lfs.tar.gz'
+        with self.assertRaisesRegex(ValueError, 'does not match'):
+            client.archive_source(repo, commit, output)
+        path.write_bytes(blob)
+        client.archive_source(repo, commit, output)
+        with tarfile.open(output) as archive:
+            self.assertEqual(archive.extractfile('asset.dat').read(), blob)
+        path.write_bytes(b'wrong object')
+        with self.assertRaisesRegex(ValueError, 'does not match'):
+            client.archive_source(repo, commit, output)
+
+    def test_notification_is_optional_and_does_not_include_token(self):
+        self.assertIsNone(notify.payload({}))
+        token, body = notify.payload({'DEPLOY_TELEGRAM_BOT_TOKEN':'123:test-token',
+                                     'DEPLOY_TELEGRAM_CHAT_ID':'-10012',
+                                     'DEPLOY_OUTCOME':'failure',
+                                     'GITHUB_REPOSITORY':'owner/repo', 'GITHUB_RUN_ID':'42'})
+        self.assertNotIn(token, str(body))
+        self.assertIn('failure', body['text'])
+        self.assertIn('https://github.com/owner/repo/actions/runs/42', body['text'])
+        with self.assertRaises(ValueError):
+            notify.payload({'DEPLOY_TELEGRAM_BOT_TOKEN':'https://bad.test', 'DEPLOY_TELEGRAM_CHAT_ID':'-1'})
+
 
 if __name__ == '__main__': unittest.main()

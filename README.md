@@ -30,6 +30,7 @@ Set `DEPLOY_KNOWN_HOSTS` to a trusted OpenSSH known_hosts entry verified against
 
 | Input | Default | Purpose |
 |---|---|---|
+| `source-path` | `.` | Checkout directory relative to workspace. |
 | `compose-files` | automatic / empty | Newline-separated Compose paths; autodetect if empty. |
 | `project-name` | automatic / empty | Stable Compose project name. |
 | `deploy-path` | automatic / empty | Absolute dedicated remote directory. |
@@ -54,7 +55,7 @@ Compose files are autodetected when there is a single standard file in the root 
 
 ### Git submodules
 
-For repositories with submodules, configure checkout with `submodules: recursive` and appropriate credentials. The archive recursively includes the pinned commits of initialized submodules, never their `.git` metadata or untracked files. A mismatching or missing checkout fails before SSH. Git LFS objects are not materialized by git archive.
+For repositories with submodules, configure checkout with `submodules: recursive` and appropriate credentials. The archive recursively includes the pinned commits of initialized submodules, never their `.git` metadata or untracked files. A mismatching or missing checkout fails before SSH. For Git LFS set checkout `lfs: true`; the action hydrates a pointer only when the checked-out file matches the committed SHA-256 and size. Missing or mismatching objects fail before SSH.
 
 ## Server requirements and persistence
 
@@ -66,7 +67,7 @@ An existing unmanaged Compose project with the same name is rejected. Migrate it
 
 Deployment prepares images first, then activates Compose with `--wait`. Optional HTTP check requires a 2xx response. If activation fails, the previous release is reactivated. Manual rollback: set `operation: rollback` with the same project and deployment path. Rollback restores application images, not database migrations, shared files or external services. No volume deletion or global prune is performed.
 
-Limitations: Git LFS objects are not bundled; no zero-downtime guarantee; no automatic framework migrations; no adoption of an existing unmanaged Compose project. Use only trusted branches and reviewed Compose definitions; Docker access can grant root-equivalent privileges.
+Limitations: no zero-downtime guarantee; no automatic framework migrations; no adoption of an existing unmanaged Compose project. Use only trusted branches and reviewed Compose definitions; Docker access can grant root-equivalent privileges.
 
 ## Build modes and registry
 
@@ -99,6 +100,12 @@ Optional `DEPLOY_JUMP_HOST`, `DEPLOY_JUMP_USER`, `DEPLOY_JUMP_PORT` (22), `DEPLO
 ## Existing projects and multiple servers
 
 Read [migration and staging guidance](docs/migration.md) before deploying an existing stack. For sequential deployment to separate servers, see [matrix example](examples/multi-server.yml). This does not provide atomic multi-host rollback.
+
+## Notifications and releases
+
+Set optional secrets `DEPLOY_TELEGRAM_BOT_TOKEN` and `DEPLOY_TELEGRAM_CHAT_ID` in the caller action's environment to receive a short deployment result in Telegram. Notification failures produce only a warning and do not change the deployment outcome. The token is not sent to the server or printed.
+
+Updating `VERSION` in main triggers the release workflow after running CI; it creates the immutable-version reference and updates the major alias (e.g. `v1`). The version workflow can also be dispatched manually. Publishing to GitHub Marketplace requires the repository owner to select the Marketplace checkbox, accept the developer agreement if necessary, and complete GitHub's 2FA requirements. Pin a reviewed full commit SHA for production.
 
 ## Tests
 
