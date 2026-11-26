@@ -1,0 +1,64 @@
+name: Localzet Deploy
+description: Deploy Docker Compose over SSH with release isolation and rollback.
+branding:
+  icon: upload-cloud
+  color: blue
+inputs:
+  compose-files:
+    description: "Newline-separated Compose paths; autodetect if empty."
+    default: ""
+  project-name:
+    description: "Stable Compose project name."
+    default: ""
+  deploy-path:
+    description: "Absolute dedicated remote directory."
+    default: ""
+  shared-paths:
+    description: "Newline-separated paths linked to existing shared data."
+    default: ""
+  profiles:
+    description: "Newline-separated Compose profiles."
+    default: ""
+  pull-policy:
+    description: "Pull policy for registry images: always, missing, never."
+    default: "always"
+  wait-timeout:
+    description: "Compose readiness timeout in seconds."
+    default: "120"
+  health-url:
+    description: "Optional HTTP(S) readiness URL checked on server."
+    default: ""
+  health-timeout:
+    description: "HTTP readiness timeout in seconds."
+    default: "60"
+  keep-releases:
+    description: "Number of retained successful releases."
+    default: "3"
+  operation:
+    description: "deploy or rollback."
+    default: "deploy"
+outputs:
+  release:
+    description: Active release ID.
+    value: ${{ steps.deploy.outputs.release }}
+  project:
+    description: Compose project name.
+    value: ${{ steps.deploy.outputs.project }}
+runs:
+  using: composite
+  steps:
+    - id: deploy
+      shell: bash
+      env:
+        ACTION_COMPOSE_FILES: ${{ inputs.compose-files }}
+        ACTION_PROJECT_NAME: ${{ inputs.project-name }}
+        ACTION_DEPLOY_PATH: ${{ inputs.deploy-path }}
+        ACTION_SHARED_PATHS: ${{ inputs.shared-paths }}
+        ACTION_PROFILES: ${{ inputs.profiles }}
+        ACTION_PULL_POLICY: ${{ inputs.pull-policy }}
+        ACTION_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+        ACTION_HEALTH_URL: ${{ inputs.health-url }}
+        ACTION_HEALTH_TIMEOUT: ${{ inputs.health-timeout }}
+        ACTION_KEEP_RELEASES: ${{ inputs.keep-releases }}
+        ACTION_OPERATION: ${{ inputs.operation }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/client.py"

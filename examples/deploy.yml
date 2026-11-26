@@ -1,0 +1,36 @@
+name: Deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Operation
+        type: choice
+        options: [deploy, rollback]
+        default: deploy
+permissions:
+  contents: read
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Pin to a reviewed full commit SHA before production use.
+      - uses: localzet/deploy-action@main
+        with:
+          operation: ${{ inputs.operation || 'deploy' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          DEPLOY_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
+          DEPLOY_PORT: ${{ vars.SERVER_PORT }}
