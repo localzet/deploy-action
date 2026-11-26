@@ -1,0 +1,27 @@
+name: Deploy multiple servers
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        target: [production-a, production-b]
+    environment: ${{ matrix.target }}
+    concurrency:
+      group: deploy-${{ matrix.target }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: localzet/deploy-action@main
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}

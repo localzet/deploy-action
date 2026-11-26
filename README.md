@@ -74,7 +74,7 @@ Limitations: Git LFS objects are not bundled; no zero-downtime guarantee; no aut
 - `runner`: build the committed snapshot on the runner, transfer images via SSH using docker save/load. Requires Docker Compose on the runner and matching target architecture or explicit compatible platform.
 - `registry`: build on the runner and push unique release tags to `registry-prefix` (e.g. `ghcr.io/owner/project`). The server pulls and checks image IDs before creating local release tags. Both sides must authenticate to the registry before deployment. See [GHCR example](examples/ghcr.yml). Registry retention is independent of server release retention.
 
-Runner modes do not copy production .env to the runner. Supply only build-time interpolation values through the optional `DEPLOY_BUILD_ENV` secret (dotenv format, outside the build context). The build and server Compose service sets must match. Do not use server-only bind mounts, absolute build paths or runtime secrets as build inputs. External registry images are pulled on the target in all modes. Multi-platform manifest builds are not provided.
+Runner modes do not copy production .env to the runner. Supply only build-time interpolation values through the optional `DEPLOY_BUILD_ENV` secret (dotenv format, outside the build context). Runtime service env files are not resolved on the runner; a build-only model is generated from the Compose configuration. For mandatory runtime interpolation (for example `${DB_HOST:?required}`), supply non-sensitive placeholder values in `DEPLOY_BUILD_ENV` unless the variable actually affects the build. The build and server Compose service sets must match. Do not use server-only bind mounts, absolute build paths or runtime secrets as build inputs. External registry images are pulled on the target in all modes. Multi-platform manifest builds are not provided.
 
 ## Hooks and backups
 
@@ -95,6 +95,10 @@ The backup hook executes in the current running service (skipped on first deploy
 ## SSH jump hosts
 
 Optional `DEPLOY_JUMP_HOST`, `DEPLOY_JUMP_USER`, `DEPLOY_JUMP_PORT` (22), `DEPLOY_JUMP_SSH_KEY`, `DEPLOY_JUMP_KNOWN_HOSTS`. The jump uses public-key authentication and its own verified host key; if no separate key or known_hosts is supplied, the target values are reused. Target authentication can use password or key.
+
+## Existing projects and multiple servers
+
+Read [migration and staging guidance](docs/migration.md) before deploying an existing stack. For sequential deployment to separate servers, see [matrix example](examples/multi-server.yml). This does not provide atomic multi-host rollback.
 
 ## Tests
 

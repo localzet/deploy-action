@@ -45,6 +45,10 @@ cat > compose.yml <<'EOF'
 services:
   app:
     build: .
+    env_file:
+      - .env
+    environment:
+      RUNTIME_HOST: "${RUNTIME_HOST:?RUNTIME_HOST required}"
     healthcheck:
       test: [CMD-SHELL, 'test -f /healthy']
       interval: 1s
@@ -63,6 +67,13 @@ export DEPLOY_KNOWN_HOSTS="[127.0.0.1]:$port $(cat "$work/host_key.pub")"
 export ACTION_PROJECT_NAME=localzet-ssh-ci
 export ACTION_WAIT_TIMEOUT=30
 export ACTION_OPERATION=deploy
+# The real dotenv is deliberately server-only.
+shared="/home/$test_user/.local/share/localzet-deploy/localzet-ssh-ci/shared"
+sudo install -d -m 700 -o "$test_user" "$shared"
+printf 'RUNTIME_HOST=server-only\nPRIVATE_RUNTIME_TOKEN=server-only-secret\n' | sudo tee "$shared/.env" >/dev/null
+sudo chown "$test_user" "$shared/.env"
+sudo chmod 600 "$shared/.env"
+export DEPLOY_BUILD_ENV='RUNTIME_HOST=unused-build-placeholder'
 # Isolate outputs from the surrounding CI step.
 export GITHUB_OUTPUT="$work/outputs"
 export DEPLOY_SSH_KEY="$(cat "$work/client_key")"
@@ -91,6 +102,7 @@ export ACTION_POST_DEPLOY='app sh -c "test -f /healthy"'
 write_version 3
 python3 "$action_dir/scripts/client.py"
 [[ "$(docker exec "$(cid)" cat /version)" == 3 ]]
+[[ "$(docker exec "$(cid)" printenv PRIVATE_RUNTIME_TOKEN)" == server-only-secret ]]
 unset DEPLOY_JUMP_HOST DEPLOY_JUMP_PORT DEPLOY_JUMP_USER DEPLOY_JUMP_SSH_KEY
 unset ACTION_PRE_DEPLOY ACTION_POST_DEPLOY
 export ACTION_OPERATION=rollback
