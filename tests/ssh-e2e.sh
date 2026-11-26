@@ -69,7 +69,8 @@ export ACTION_WAIT_TIMEOUT=30
 export ACTION_OPERATION=deploy
 # The real dotenv is deliberately server-only.
 shared="/home/$test_user/.local/share/localzet-deploy/localzet-ssh-ci/shared"
-sudo install -d -m 700 -o "$test_user" "$shared"
+sudo -u "$test_user" mkdir -p "$shared"
+sudo -u "$test_user" chmod 700 "$shared"
 printf 'RUNTIME_HOST=server-only\nPRIVATE_RUNTIME_TOKEN=server-only-secret\n' | sudo tee "$shared/.env" >/dev/null
 sudo chown "$test_user" "$shared/.env"
 sudo chmod 600 "$shared/.env"

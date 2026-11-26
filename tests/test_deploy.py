@@ -151,7 +151,7 @@ class DeployTests(unittest.TestCase):
                                      'volumes': ['data:/data'], 'platform': 'linux/amd64'}},
                  'secrets': {'runtime': {'file': '/tmp/runtime-secret'}}}
         result = runner.build_model(model, model['services'], {'app': 'localzet-deploy/demo:one'})
-        self.assertEqual(result, {'services': {'app': {'build': {'context': '/tmp/src', 'args': {'VALUE': '$literal'}},
+        self.assertEqual(result, {'services': {'app': {'build': {'context': '/tmp/src', 'args': {'VALUE': '$$literal'}},
                                                       'platform': 'linux/amd64', 'image': 'localzet-deploy/demo:one'}}})
 
     def test_registry_validation(self):

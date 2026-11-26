@@ -30,63 +30,7 @@ def docker_environment():
 def escape_interpolation(value):
     """Compose has already interpolated config; preserve literal dollars on reload."""
     if isinstance(value, str):
-        return value.replace('
-    source = tmp/'build-source'
-    source.mkdir()
-    with tarfile.open(tmp/'source.tar.gz') as archive:
-        archive.extractall(source, filter='data')
-    files = discover(source, cfg['files'])
-    for f in files:
-        safe_path(source, f)
-    env_file = tmp/'build.env'
-    env_file.write_text(build_env + '\n')
-    env_file.chmod(0o600)
-    env = docker_environment()
-    def call(args, capture=False):
-        return subprocess.run([str(x) for x in args], cwd=source, env=env, check=True, text=True,
-                              stdout=subprocess.PIPE if capture else None).stdout
-    base = ['docker', 'compose', '--project-name', cfg['project'],
-            '--project-directory', str((source/files[0]).parent), '--env-file', str(env_file)]
-    for p in cfg['profiles']:
-        base += ['--profile', p]
-    for f in files:
-        base += ['-f', str(source/f)]
-    model = json.loads(call(base+['config', '--no-env-resolution', '--format', 'json'], capture=True))
-    services = active_services(model, cfg['profiles'])
-    tags = {name: image_tag(cfg['project'], cfg['release'], name)
-            for name, svc in services.items() if svc.get('build')}
-    if not tags:
-        return {}
-    build_file = tmp/'build-only.json'
-    build_file.write_text(json.dumps(build_model(model, services, tags)))
-    build_file.chmod(0o600)
-    build_base = ['docker', 'compose', '--project-name', cfg['project'],
-                  '--project-directory', str((source/files[0]).parent),
-                  '--env-file', str(env_file), '-f', str(build_file)]
-    registry_tags = []
-    manifest = {}
-    try:
-        call(build_base+['build', *tags])
-        for name, tag in tags.items():
-            ident = call(['docker', 'image', 'inspect', '--format', '{{.Id}}', tag], capture=True).strip()
-            if not re.fullmatch(r'sha256:[a-f0-9]{64}', ident):
-                raise ValueError('Unexpected Docker image ID')
-            entry = {'id': ident}
-            if cfg['build_mode'] == 'registry':
-                ref = registry_prefix(cfg['registry_prefix'])+':'+tag.rsplit(':', 1)[1]
-                registry_tags.append(ref)
-                call(['docker', 'image', 'tag', tag, ref])
-                call(['docker', 'push', ref])
-                entry['ref'] = ref
-            manifest[name] = entry
-        if cfg['build_mode'] == 'runner':
-            call(['docker', 'image', 'save', '-o', str(tmp/'images.tar'), *tags.values()])
-        return manifest
-    finally:
-        for tag in [*tags.values(), *registry_tags]:
-            subprocess.run(['docker', 'image', 'rm', tag], env=env, check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-, '$')
+        return value.replace('$', '$$')
     if isinstance(value, list):
         return [escape_interpolation(x) for x in value]
     if isinstance(value, dict):
@@ -133,18 +77,22 @@ def build_images(cfg, tmp, build_env):
         base += ['--profile', p]
     for f in files:
         base += ['-f', str(source/f)]
-    model = json.loads(call(base+['config', '--format', 'json'], capture=True))
+    model = json.loads(call(base+['config', '--no-env-resolution', '--format', 'json'], capture=True))
     services = active_services(model, cfg['profiles'])
     tags = {name: image_tag(cfg['project'], cfg['release'], name)
             for name, svc in services.items() if svc.get('build')}
     if not tags:
         return {}
-    override = tmp/'build-images.json'
-    override.write_text(json.dumps({'services': {n: {'image': t} for n, t in tags.items()}}))
+    build_file = tmp/'build-only.json'
+    build_file.write_text(json.dumps(build_model(model, services, tags)))
+    build_file.chmod(0o600)
+    build_base = ['docker', 'compose', '--project-name', cfg['project'],
+                  '--project-directory', str((source/files[0]).parent),
+                  '--env-file', str(env_file), '-f', str(build_file)]
     registry_tags = []
     manifest = {}
     try:
-        call(base+['-f', str(override), 'build', *tags])
+        call(build_base+['build', *tags])
         for name, tag in tags.items():
             ident = call(['docker', 'image', 'inspect', '--format', '{{.Id}}', tag], capture=True).strip()
             if not re.fullmatch(r'sha256:[a-f0-9]{64}', ident):
