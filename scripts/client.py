@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import tarfile
 import uuid
 
 
@@ -81,6 +82,42 @@ def ssh_setup(tmp):
     return args + [host], child_env
 
 
+
+def archive_source(workspace, commit, destination):
+    """Archive committed files and recursively checked-out, pinned Git submodules."""
+    workspace = Path(workspace).resolve()
+    with tarfile.open(destination, 'w:gz', format=tarfile.PAX_FORMAT) as output:
+        def visit(repo, oid, prefix=''):
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(repo), *args])
+            if Path(os.fsdecode(git('rev-parse', '--show-toplevel').rstrip(b'\n'))).resolve() != repo:
+                raise ValueError(f'Submodule not initialized: {prefix}')
+            if git('rev-parse', 'HEAD').decode().strip() != oid:
+                raise ValueError(f'Checkout does not match pinned commit: {prefix or "."}')
+            with tempfile.TemporaryFile() as archive:
+                subprocess.run(['git', '-C', str(repo), 'archive', '--format=tar',
+                                '--prefix='+prefix, oid], stdout=archive, check=True)
+                archive.seek(0)
+                with tarfile.open(fileobj=archive, mode='r:') as source:
+                    included = set()
+                    for member in source:
+                        included.add(member.name.rstrip('/'))
+                        output.addfile(member, source.extractfile(member) if member.isfile() else None)
+            for entry in git('ls-tree', '-r', '-z', oid).split(b'\0'):
+                if not entry.startswith(b'160000 '):
+                    continue
+                metadata, path = entry.split(b'\t', 1)
+                name = os.fsdecode(path)
+                full = prefix + name
+                if full not in included:
+                    continue  # export-ignore
+                child = (repo/name).resolve()
+                if not child.is_relative_to(repo) or not child.is_dir() or not (child/'.git').exists():
+                    raise ValueError(f'Initialize submodule before deploy: {full}')
+                visit(child, metadata.split()[2].decode(), full+'/')
+        visit(workspace, commit)
+
+
 def main():
     cfg = configuration()
     with tempfile.TemporaryDirectory(prefix='localzet-deploy-') as d:
@@ -90,9 +127,7 @@ def main():
             def git(*args):
                 return subprocess.check_output(['git', '-C', workspace, *args])
             cfg['commit'] = git('rev-parse', 'HEAD').decode().strip()
-            if any(row.startswith(b'160000 ') for row in git('ls-tree', '-r', '-z', 'HEAD').split(b'\0')):
-                raise ValueError('Git submodules are not supported by git archive')
-            subprocess.run(['git', '-C', workspace, 'archive', '--format=tar.gz', '-o', str(tmp/'source.tar.gz'), 'HEAD'], check=True)
+            archive_source(workspace, cfg['commit'], tmp/'source.tar.gz')
         args, child_env = ssh_setup(tmp)
         def ssh(command, **kwargs):
             return subprocess.run(args + [shlex.join(command)], env=child_env, check=True, **kwargs)

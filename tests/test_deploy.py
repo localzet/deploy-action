@@ -115,4 +115,33 @@ class DeployTests(unittest.TestCase):
         with self.assertRaises(tarfile.FilterError): remote.Manager(self.cfg(1),self.incoming).execute()
 
 
+    def test_nested_submodules_are_pinned(self):
+        root = self.base/'git'
+        root.mkdir()
+        child = root/'module'; child.mkdir()
+        nested = child/'nested'; nested.mkdir()
+        def git(p, *args):
+            return subprocess.check_output(['git', '-C', str(p), *args],
+                                           stderr=subprocess.DEVNULL).decode().strip()
+        for p in (nested, child, root):
+            git(p, 'init'); git(p, 'config', 'user.name', 'Test')
+            git(p, 'config', 'user.email', 'test@example.com')
+            (p/'test.txt').write_text(p.name)
+            git(p, 'add', 'test.txt'); git(p, 'commit', '-m', 'fixture')
+        for p, name in ((child, 'nested'), (root, 'module')):
+            git(p, 'add', name); git(p, 'commit', '-m', 'submodule')
+        target = self.base/'out.tar.gz'
+        commit = git(root, 'rev-parse', 'HEAD')
+        (root/'secret-untracked').write_text('not in archive')
+        client.archive_source(root, commit, target)
+        with tarfile.open(target) as archive:
+            self.assertEqual(archive.extractfile('module/nested/test.txt').read(), b'nested')
+            self.assertNotIn('secret-untracked', archive.getnames())
+            self.assertFalse(any('.git/' in n for n in archive.getnames()))
+        (nested/'test.txt').write_text('changed')
+        git(nested, 'add', 'test.txt'); git(nested, 'commit', '-m', 'changed')
+        with self.assertRaisesRegex(ValueError, 'pinned commit'):
+            client.archive_source(root, commit, target)
+
+
 if __name__ == '__main__': unittest.main()
