@@ -17,3 +17,6 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Real Compose smoke test
         run: python3 tests/e2e.py
+
+      - name: SSH transport smoke test
+        run: bash tests/ssh-e2e.sh

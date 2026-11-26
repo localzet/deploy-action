@@ -44,6 +44,10 @@ Outputs: `release`, `project`.
 
 Compose files are autodetected when there is a single standard file in the root or a unique YAML file with `compose` in its name. Specify multiple files in order explicitly. Overrides are not automatically included.
 
+### Git submodules
+
+For repositories with submodules, configure checkout with `submodules: recursive` and appropriate credentials. The archive recursively includes the pinned commits of initialized submodules, never their `.git` metadata or untracked files. A mismatching or missing checkout fails before SSH. Git LFS objects are not materialized by git archive.
+
 ## Server requirements and persistence
 
 Linux, Python with `tarfile.data_filter` (3.12+ or patched older versions), current Docker Compose v2, and an SSH account with Docker access and permission to write the deployment directory. The Linux runner needs Python 3, Git, OpenSSH; password auth uses sshpass. Registry credentials must be configured separately on the server.
@@ -54,12 +58,14 @@ An existing unmanaged Compose project with the same name is rejected. Migrate it
 
 Deployment prepares images first, then activates Compose with `--wait`. Optional HTTP check requires a 2xx response. If activation fails, the previous release is reactivated. Manual rollback: set `operation: rollback` with the same project and deployment path. Rollback restores application images, not database migrations, shared files or external services. No volume deletion or global prune is performed.
 
-Limitations: Git submodules and LFS objects are not bundled; no zero-downtime guarantee; builds run on the VPS; no automatic framework migrations; no adoption of an existing unmanaged Compose project. Use only trusted branches and reviewed Compose definitions; Docker access can grant root-equivalent privileges.
+Limitations: Git LFS objects are not bundled; no zero-downtime guarantee; builds run on the VPS; no automatic framework migrations; no adoption of an existing unmanaged Compose project. Use only trusted branches and reviewed Compose definitions; Docker access can grant root-equivalent privileges.
 
 ## Tests
 
 `python3 -m unittest discover -s tests -v`
 
 `python3 tests/e2e.py` (requires Docker; disposable Linux runner).
+
+`bash tests/ssh-e2e.sh` (disposable runner only: creates a local test account and SSH daemon; checks key and password authentication, host key rejection and rollback).
 
 MIT license.
